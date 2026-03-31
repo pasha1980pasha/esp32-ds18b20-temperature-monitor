@@ -1,0 +1,166 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+// Wi-Fi
+const char* ssid = "GalaxyM";
+const char* password = "www111www";
+
+// Пин DS18B20
+#define DS18B20_PIN 4
+
+OneWire oneWire(DS18B20_PIN);
+DallasTemperature sensors(&oneWire);
+DeviceAddress sensorAddr;
+
+WebServer server(80);
+
+String addrToString(DeviceAddress addr) {
+  String str = "";
+  for (uint8_t i = 0; i < 8; i++) {
+    if (addr[i] < 0x10) str += "0";
+    str += String(addr[i], HEX);
+    if (i < 7) str += ":";
+  }
+  return str;
+}
+
+String buildWebPage() {
+  sensors.begin();
+  String html;
+
+  if (sensors.getDeviceCount() > 0 && sensors.getAddress(sensorAddr, 0)) {
+    // Запрашиваем температуру
+    sensors.requestTemperatures();
+    float tempC = sensors.getTempC(sensorAddr);
+    String tempStr = (tempC != DEVICE_DISCONNECTED_C) ? String(tempC, 2) + " °C" : "Ошибка чтения";
+
+    html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DS18B20 Температура</title>
+  <style>
+    body { font-family: Arial, padding: 20px; background: #f0f8ff; text-align: center; }
+    h2 { color: #2c3e50; }
+    .card {
+      background: white;
+      padding: 25px;
+      border-radius: 12px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      max-width: 400px;
+      margin: 20px auto;
+    }
+    .success { color: #27ae60; font-size: 18px; }
+    .addr { 
+      font-family: monospace; 
+      font-size: 14px; 
+      background: #f8f9fa; 
+      padding: 8px; 
+      border: 1px dashed #aaa; 
+      margin: 12px 0;
+      word-break: break-all;
+    }
+    .temp {
+      font-size: 32px;
+      font-weight: bold;
+      color: #e74c3c;
+      margin: 15px 0;
+    }
+    .btn {
+      background: #3498db;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 15px;
+    }
+    .btn:hover { background: #2980b9; }
+  </style>
+</head>
+<body>
+  <h2>DS18B20: Температура</h2>
+  <div class="card">
+    <div class="success">✅ Датчик найден!</div>
+    <div>Адрес:</div>
+    <div class="addr">)rawliteral" + addrToString(sensorAddr) + R"rawliteral(</div>
+    <div>Температура:</div>
+    <div class="temp">)rawliteral" + tempStr + R"rawliteral(</div>
+    <button class="btn" onclick="location.reload()">Обновить</button>
+  </div>
+</body>
+</html>
+)rawliteral";
+  } else {
+    html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DS18B20 Не найден</title>
+  <style>
+    body { font-family: Arial, padding: 20px; background: #ffeaea; text-align: center; }
+    h2 { color: #c0392b; }
+    .card {
+      background: white;
+      padding: 25px;
+      border-radius: 12px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      max-width: 400px;
+      margin: 20px auto;
+    }
+    .btn {
+      background: #e74c3c;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 15px;
+    }
+    .btn:hover { background: #c0392b; }
+  </style>
+</head>
+<body>
+  <h2>❌ DS18B20 не найден</h2>
+  <div class="card">
+    <p>Проверьте подключение:</p>
+    <p>– Data → GPIO4<br>– VDD → 3.3V<br>– GND → GND<br>– Резистор 4.7 кОм между Data и 3.3V</p>
+    <button class="btn" onclick="location.reload()">Повторить поиск</button>
+  </div>
+</body>
+</html>
+)rawliteral";
+  }
+
+  return html;
+}
+
+void handleRoot() {
+  server.send(200, "text/html", buildWebPage());
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.softAP(ssid, password);
+  WiFi.softAPConfig(IPAddress(10, 0, 0, 1), IPAddress(10, 0, 0, 1), IPAddress(255, 255, 255, 0));
+  
+  server.on("/", handleRoot);
+  server.begin();
+
+  Serial.println("Готово!");
+  Serial.println("Wi-Fi: GalaxyM / www111www");
+  Serial.println("Откройте: http://10.0.0.1");
+}
+
+void loop() {
+  server.handleClient();
+}ы

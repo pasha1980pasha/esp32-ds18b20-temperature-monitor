@@ -1,0 +1,212 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+// Wi-Fi
+const char* ssid = "GalaxyM";
+const char* password = "www111www";
+
+// Пин DS18B20
+#define DS18B20_PIN 4
+
+OneWire oneWire(DS18B20_PIN);
+DallasTemperature sensors(&oneWire);
+DeviceAddress sensorAddr;
+WebServer server(80);
+
+// Буфер для хранения истории температур (последние 20 значений)
+#define MAX_HISTORY 20
+float tempHistory[MAX_HISTORY];
+unsigned long timeHistory[MAX_HISTORY];
+int historyIndex = 0;
+bool historyFull = false;
+
+String addrToString(DeviceAddress addr) {
+  String str = "";
+  for (uint8_t i = 0; i < 8; i++) {
+    if (addr[i] < 0x10) str += "0";
+    str += String(addr[i], HEX);
+    if (i < 7) str += ":";
+  }
+  return str;
+}
+
+// Добавление нового значения в историю
+void addTempToHistory(float temp) {
+  tempHistory[historyIndex] = temp;
+  timeHistory[historyIndex] = millis() / 1000; // секунды с запуска
+  historyIndex++;
+  if (historyIndex >= MAX_HISTORY) {
+    historyIndex = 0;
+    historyFull = true;
+  }
+}
+
+// Генерация JSON-массива для графика
+String getChartData() {
+  String labels = "[";
+  String data = "[";
+  int count = historyFull ? MAX_HISTORY : historyIndex;
+
+  // Определяем стартовый индекс для правильного порядка
+  int start = historyFull ? historyIndex : 0;
+  for (int i = 0; i < count; i++) {
+    int idx = (start + i) % MAX_HISTORY;
+    if (i > 0) {
+      labels += ",";
+      data += ",";
+    }
+    labels += "\"" + String(timeHistory[idx]) + "s\"";
+    data += String(tempHistory[idx], 1);
+  }
+  labels += "]";
+  data += "]";
+  return "\"labels\": " + labels + ", \"data\": " + data;
+}
+
+String buildWebPage() {
+  sensors.begin();
+  float currentTemp = DEVICE_DISCONNECTED_C;
+  String addrStr = "—";
+  bool sensorFound = false;
+
+  if (sensors.getDeviceCount() > 0 && sensors.getAddress(sensorAddr, 0)) {
+    sensors.requestTemperatures();
+    currentTemp = sensors.getTempC(sensorAddr);
+    addrStr = addrToString(sensorAddr);
+    sensorFound = true;
+    if (currentTemp != DEVICE_DISCONNECTED_C) {
+      addTempToHistory(currentTemp);
+    }
+  }
+
+  String tempStr = (currentTemp != DEVICE_DISCONNECTED_C) ? String(currentTemp, 2) + " °C" : "Ошибка";
+  uint32_t uptimeSec = millis() / 1000;
+
+  if (sensorFound && currentTemp != DEVICE_DISCONNECTED_C) {
+    String chartData = getChartData();
+    return R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="5">
+  <title>Температура + График</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, padding: 10px; background: #f5f7fa; margin: 0; }
+    h2 { text-align: center; color: #2c3e50; margin: 10px 0; }
+    .card {
+      background: white;
+      padding: 15px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      margin: 10px;
+    }
+    .info { text-align: center; margin: 10px 0; }
+    .temp { font-size: 28px; font-weight: bold; color: #e74c3c; }
+    .addr { font-family: monospace; font-size: 13px; background: #f8f9fa; padding: 6px; border-radius: 4px; margin: 8px 0; word-break: break-all; }
+    .uptime { font-size: 13px; color: #7f8c8d; margin-top: 8px; }
+    canvas { max-width: 100%; height: 200px !important; }
+  </style>
+</head>
+<body>
+  <h2>🌡️ DS18B20: Температура</h2>
+  <div class="card">
+    <div class="info">✅ Датчик найден</div>
+    <div>Адрес: <span class="addr">)rawliteral" + addrStr + R"rawliteral(</span></div>
+    <div>Текущая температура: <span class="temp">)rawliteral" + tempStr + R"rawliteral(</span></div>
+    <div class="uptime">🕗 Обновлено: )rawliteral" + String(uptimeSec) + R"rawliteral( сек с запуска</div>
+  </div>
+
+  <div class="card">
+    <canvas id="tempChart"></canvas>
+  </div>
+
+  <script>
+    const ctx = document.getElementById('tempChart').getContext('2d');
+    const data = {)rawliteral" + chartData + R"rawliteral(};
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: JSON.parse('[' + data.labels.substring(1, data.labels.length - 1) + ']'),
+        datasets: [{
+          label: 'Температура (°C)',
+          data: JSON.parse('[' + data.data.substring(1, data.data.length - 1) + ']'),
+          borderColor: '#e74c3c',
+          backgroundColor: 'rgba(231, 76, 60, 0.1)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: { beginAtZero: false },
+          x: { title: { display: true, text: 'Время (сек с запуска)' } }
+        },
+        plugins: { legend: { display: true } }
+      }
+    });
+  </script>
+</body>
+</html>
+)rawliteral";
+  } else {
+    return R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="5">
+  <title>DS18B20 Не найден</title>
+  <style>
+    body { font-family: Arial, padding: 20px; background: #ffeaea; text-align: center; }
+    h2 { color: #c0392b; }
+    .card {
+      background: white;
+      padding: 25px;
+      border-radius: 12px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      max-width: 400px;
+      margin: 20px auto;
+    }
+  </style>
+</head>
+<body>
+  <h2>❌ DS18B20 не найден</h2>
+  <div class="card">
+    <p>Проверьте подключение:</p>
+    <p>– Data → GPIO4<br>– VDD → 3.3V<br>– GND → GND<br>– Резистор 4.7 кОм между Data и 3.3V</p>
+  </div>
+</body>
+</html>
+)rawliteral";
+  }
+}
+
+void handleRoot() {
+  server.send(200, "text/html", buildWebPage());
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.softAP(ssid, password);
+  WiFi.softAPConfig(IPAddress(10, 0, 0, 1), IPAddress(10, 0, 0, 1), IPAddress(255, 255, 255, 0));
+  server.on("/", handleRoot);
+  server.begin();
+  Serial.println("Готово!");
+  Serial.println("Wi-Fi: GalaxyM / www111www");
+  Serial.println("Откройте: http://10.0.0.1");
+}
+
+void loop() {
+  server.handleClient();
+}

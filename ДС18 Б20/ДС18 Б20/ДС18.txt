@@ -1,0 +1,51 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+const char* ssid = "GalaxyM";
+const char* password = "www111www";
+
+#define DS18B20_PIN 4
+
+OneWire oneWire(DS18B20_PIN);
+DallasTemperature sensors(&oneWire);
+DeviceAddress sensorAddr;
+
+WebServer server(80);
+
+String addrToString(DeviceAddress addr) {
+  String str = "";
+  for (uint8_t i = 0; i < 8; i++) {
+    if (addr[i] < 0x10) str += "0";
+    str += String(addr[i], HEX);
+    if (i < 7) str += ":";
+  }
+  return str;
+}
+
+void handleRoot() {
+  sensors.begin();
+  String html;
+  if (sensors.getDeviceCount() > 0 && sensors.getAddress(sensorAddr, 0)) {
+    html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>DS18B20</title></head><body style='font-family:Arial;text-align:center;padding:20px;background:#f0f8ff;'><h2>✅ DS18B20 найден!</h2><div style='font-size:18px;font-family:monospace;background:#fff;padding:15px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.1);margin:20px;'>Адрес: " + addrToString(sensorAddr) + "</div><p>Скопируйте этот адрес.</p></body></html>";
+  } else {
+    html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>DS18B20</title></head><body style='font-family:Arial;text-align:center;padding:20px;background:#ffeaea;'><h2>❌ DS18B20 не найден</h2><p>Проверьте подключение:<br>Data → GPIO4<br>VDD → 3.3V<br>GND → GND<br>Резистор 4.7 кОм между Data и 3.3V</p><button onclick='location.reload()' style='padding:10px 20px;background:#e74c3c;color:white;border:none;border-radius:5px;margin-top:15px;'>Обновить</button></body></html>";
+  }
+  server.send(200, "text/html", html);
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.softAP(ssid, password);
+  WiFi.softAPConfig(IPAddress(10, 0, 0, 1), IPAddress(10, 0, 0, 1), IPAddress(255, 255, 255, 0));
+  server.on("/", handleRoot);
+  server.begin();
+  Serial.println("Готово. Подключайтесь к GalaxyM / www111www");
+  Serial.println("Адрес: http://10.0.0.1");
+}
+
+void loop() {
+  server.handleClient();
+}
